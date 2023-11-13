@@ -1,25 +1,9 @@
+require('dotenv').config()
 const express = require('express')
 const app = express()
 const cors = require('cors')
-
-
-let notes = [
-    {
-      id: 1,
-      content: "HTML is easy",
-      important: true
-    },
-    {
-      id: 2,
-      content: "Browser can execute only JavaScript",
-      important: false
-    },
-    {
-      id: 3,
-      content: "GET and POST are the most important methods of HTTP protocol",
-      important: true
-    }
-  ]
+const Note = require('./models/note')
+const mongoose = require('mongoose')
 
 
   const unknownEndpoint = (request, response) => {
@@ -27,9 +11,8 @@ let notes = [
   }
 
   const noteChecker = (request, response, next) => {
-    const id = Number(request.params.id)
-    if (!notes.map(note => note.id).includes(id)) {
-        response.status(404).send({error: 'invalid note id'})
+    if (!mongoose.isValidObjectId(request.params.id)) {
+     return response.status(404).send({error: 'invalid note id'})
     }
     next()
   }
@@ -42,9 +25,9 @@ let notes = [
     next()
   }
 
-  app.use(cors())
-  app.use(express.json())
   app.use(express.static('dist'))
+  app.use(express.json())
+  app.use(cors())
   app.use(requestLogger)
   
   app.get('/', (request, response) => {
@@ -52,40 +35,47 @@ let notes = [
   })
   
   app.get('/api/notes', (request, response) => {
-    response.json(notes)
+    Note.find({}).then(notes => {
+      response.json(notes)
+    })
   })
 
   app.get('/api/notes/:id', noteChecker, (request, response) => {
-    const id = Number(request.params.id)
-    const note = notes.find(note => note.id === id)
-
-    if (note) {
-        response.json(note)
-    } else {
-        response.status(404).end()
-    }
+    
+    Note.findById(request.params.id).then(note => {
+        if (note) {
+          response.json(note)
+        } else {
+          response.status(404).end()
+        }
+    }).catch(error => {
+        console.log(error)
+        response.status(500).end()
+    })
   })
 
   app.put('/api/notes/:id', noteChecker, (request, response) => {
-    const id = Number(request.params.id)
-    notes = notes.map(note => (note.id === id) ? {...note, important: !note.important} : note)
- 
-    response.status(200).json(notes.filter(note => note.id === id)[0])
+    const body = request.body
+
+    const note = {
+      content: body.content,
+      important: body.important,
+    }
+
+    Note.findByIdAndUpdate(request.params.id, note, {new: true}).then(updatedNote => {
+      response.json(updatedNote)
+    }).catch(error => next(error))
+    
   })
 
   app.delete('/api/notes/:id', noteChecker, (request, response) => {
-    const id = Number(request.params.id)
-    notes = notes.filter(note => note.id !== id)
-  
-    response.status(204).end()
+    Note.findByIdAndRemove(request.params.id)
+    .then(result => {
+      response.status(204).end()
+    })
+    .catch(error => next(error))
   })
 
-  const generateId = () => {
-    const maxId = notes.length > 0
-      ? Math.max(...notes.map(n => n.id))
-      : 0
-    return maxId + 1
-  }
   
   app.post('/api/notes', (request, response) => {
     const body = request.body
@@ -95,21 +85,32 @@ let notes = [
         error: 'content missing' 
       })
     }
-  
-    const note = {
+    
+    const note = new Note({
       content: body.content,
       important: body.important || false,
-      id: generateId(),
-    }
+    })
   
-    notes = notes.concat(note)
-  
-    response.json(note)
+    note.save().then(savedNote => {
+      response.json(savedNote)
+    })
   })
   
-  app.use(unknownEndpoint)
+app.use(unknownEndpoint)
 
-  const PORT = process.env.PORT || 3001
+const errorHandler = (error, request, response, next) => {
+  console.error(error.message)
+
+  if (error.name === 'CastError') {
+    return response.status(400).send({ error: 'malformatted id' })
+  } 
+
+  next(error)
+}
+
+app.use(errorHandler)
+
+  const PORT = process.env.PORT
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`)
   })
